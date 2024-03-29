@@ -1,18 +1,11 @@
+use crate::{
+    error::{ArchiveError, Error, FetchIdsError},
+    models::{MailchimpError, MailchimpListResponse},
+};
 use async_gen::gen;
 use futures_core::Stream;
-use serde::Deserialize;
 use std::{sync::Arc, time::Duration};
 use tokio::task::JoinSet;
-
-#[derive(Deserialize, Clone, Debug)]
-struct MailchimpMember {
-    id: String,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-struct MailchimpListResponse {
-    members: Vec<MailchimpMember>,
-}
 
 #[derive(Debug, Clone)]
 pub struct PageSize(usize);
@@ -42,25 +35,6 @@ pub struct Client {
     page_size: PageSize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct MailchimpError {
-    pub r#type: String,
-    pub title: String,
-    pub status: u16,
-    pub detail: String,
-    pub istance: String,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Request error: {0}")]
-    Request(#[from] reqwest::Error),
-    #[error("Mailchimp error")]
-    Mailchimp(MailchimpError),
-    #[error("Join error: {0}")]
-    Join(#[from] tokio::task::JoinError),
-}
-
 impl Client {
     pub fn new<S: Into<String>>(base_url: S, list_id: S, api_key: S) -> Arc<Self> {
         let http = reqwest::Client::builder()
@@ -76,7 +50,11 @@ impl Client {
         })
     }
 
-    async fn fetch_unsubscribed_ids(&self) -> Result<Vec<String>, Error> {
+    /// Eagerly fetches all the ids of the unsubscribed users.
+    /// This is because mailchimp doesn't offer a stable paginated API, so if we
+    /// stream the user IDs as they arrive and we start deleting them, we might
+    /// end messing up the pagination and end up with missing records.
+    async fn fetch_unsubscribed_ids(&self) -> Result<Vec<String>, FetchIdsError> {
         let mut offset = 0;
         let mut unsubcribed_ids = vec![];
         loop {
@@ -91,7 +69,7 @@ impl Client {
 
             if resp.status().is_client_error() {
                 let body: MailchimpError = resp.json().await?;
-                return Err(Error::Mailchimp(body));
+                return Err(FetchIdsError::Mailchimp(body));
             }
 
             let body: MailchimpListResponse = resp.json().await.unwrap();
@@ -110,7 +88,7 @@ impl Client {
         Ok(unsubcribed_ids)
     }
 
-    async fn archive_unsubscribed(&self, id: String) -> Result<String, Error> {
+    async fn archive_unsubscribed(&self, id: String) -> Result<String, ArchiveError> {
         let resp = self
             .http
             .patch(&format!(
@@ -121,11 +99,15 @@ impl Client {
             .header("Content-Type", "application/json")
             .body("{\"status\":\"cleaned\"}")
             .send()
-            .await?;
+            .await
+            .map_err(|e| ArchiveError::Request(id.clone(), e))?;
 
         if resp.status().is_client_error() {
-            let body: MailchimpError = resp.json().await?;
-            return Err(Error::Mailchimp(body));
+            let body: MailchimpError = resp
+                .json()
+                .await
+                .map_err(|e| ArchiveError::Request(id.clone(), e))?;
+            return Err(ArchiveError::Mailchimp(id, body));
         }
 
         Ok(id)
@@ -143,7 +125,7 @@ impl Client {
           while let Some(id) = unsubcribed_ids.pop() {
               let this = self.clone();
               tasks.spawn(async move {
-                  this.archive_unsubscribed(id).await
+                  this.archive_unsubscribed(id).await.map_err(|e| e.into())
               });
 
               if tasks.len() >= concurrency {
@@ -153,11 +135,8 @@ impl Client {
 
           while let Some(res) = tasks.join_next().await {
               match res {
-                Ok(Ok(id)) => {
-                    yield Ok(id);
-                },
-                Ok(Err(err)) => {
-                    yield Err(err);
+                Ok(r) => {
+                    yield r;
                 },
                 Err(err) => {
                     yield Err(Error::Join(err));
@@ -167,7 +146,7 @@ impl Client {
               let this = self.clone();
               if let Some(id) = unsubcribed_ids.pop() {
                   tasks.spawn(async move {
-                      this.archive_unsubscribed(id).await
+                      this.archive_unsubscribed(id).await.map_err(|e| e.into())
                   });
               }
           }

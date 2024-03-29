@@ -1,7 +1,6 @@
 use futures_util::StreamExt;
+use mailchimp_list_janitor::client;
 use std::env;
-
-mod client;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -15,7 +14,7 @@ async fn main() -> Result<(), anyhow::Error> {
     gen.for_each(|res| async move {
         match res {
             Ok(id) => println!("Archived user with id {}", id),
-            Err(err) => eprintln!("Error archiving user: {}", err),
+            Err(err) => eprintln!("{err}"),
         }
     })
     .await;
