@@ -4,7 +4,7 @@ use tokio::task::JoinError;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
-    FetchIds(#[from] FetchIdsError),
+    FetchIds(#[from] FetchMemberError),
     #[error("{0}")]
     Archive(#[from] ArchiveError),
     #[error("Task cancelled: {0}")]
@@ -12,7 +12,7 @@ pub enum Error {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum FetchIdsError {
+pub enum FetchMemberError {
     #[error("Request error: {0}")]
     Request(#[from] reqwest::Error),
     #[error("Mailchimp error: {0}")]
