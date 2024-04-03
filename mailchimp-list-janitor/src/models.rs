@@ -92,12 +92,20 @@ pub struct MailchimpError {
     pub r#type: String,
     pub title: String,
     pub status: u16,
-    pub detail: String,
-    pub istance: String,
+    pub detail: Option<String>,
+    pub istance: Option<String>,
 }
 
 impl Display for MailchimpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(format!("{} ({}): {}", self.title, self.status, self.detail).as_str())
+        f.write_str(
+            format!(
+                "{} ({}): {}",
+                self.title,
+                self.status,
+                self.detail.clone().unwrap_or_default()
+            )
+            .as_str(),
+        )
     }
 }

@@ -11,3 +11,7 @@ futures-util = "0.3.30"
 anyhow = "1.0.81"
 mailchimp-list-janitor = { path = "../mailchimp-list-janitor" }
 clap = { version = "4.5.4", features = ["derive", "env"] }
+reqwest = { version = "0.12.2", default-features = false, features = [
+  "rustls-tls",
+  "http2",
+] }

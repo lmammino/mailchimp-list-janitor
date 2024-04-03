@@ -504,6 +504,7 @@ dependencies = [
  "clap",
  "futures-util",
  "mailchimp-list-janitor",
+ "reqwest",
  "tokio",
 ]
 

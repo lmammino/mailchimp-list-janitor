@@ -5,6 +5,7 @@ use crate::{
 use async_gen::gen;
 use futures_core::Stream;
 use futures_util::StreamExt;
+use reqwest::{IntoUrl, Url};
 use std::{sync::Arc, time::Duration};
 use tokio::task::JoinSet;
 
@@ -26,9 +27,9 @@ impl Default for MaxConcurrency {
     }
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Client {
-    base_url: String,
+    base_url: Url,
     list_id: String,
     api_key: String,
     http: reqwest::Client,
@@ -36,21 +37,56 @@ pub struct Client {
     page_size: PageSize,
 }
 
+/// A Mailchimp client that can fetch and archive unsubscribed users.
 impl Client {
-    pub fn new<S: Into<String>>(base_url: S, list_id: S, api_key: S) -> Arc<Self> {
+    /// Initializes a new client using default values for `max_concurrency` and `page_size`.
+    ///
+    /// ## Panic
+    ///
+    /// This function panics if the `base_url` is not a valid URL.
+    pub fn new<U: IntoUrl, S: Into<String>>(base_url: U, list_id: S, api_key: S) -> Arc<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap();
         Arc::new(Self {
-            base_url: base_url.into(),
+            base_url: base_url.into_url().unwrap(),
             list_id: list_id.into(),
             api_key: api_key.into(),
             http,
-            ..Default::default()
+            max_concurrency: Default::default(),
+            page_size: Default::default(),
         })
     }
 
+    /// Fetches all the unsubscribed users from the list using a stream.
+    ///
+    /// ## Example
+    ///
+    /// ```no_run
+    /// use futures_util::StreamExt;
+    /// use mailchimp_list_janitor::client::Client;
+    /// use reqwest::Url;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let client = Client::new("https://us2.api.mailchimp.com", "list-id", "api-abcd1234");
+    ///     let stream = client.fetch_unsubscribed().await;
+    ///
+    ///     stream.for_each(|member| async move {
+    ///         match member {
+    ///             Ok(member) => {
+    ///                 println!("Member: {:?}", member);
+    ///             }
+    ///             Err(err) => {
+    ///                 eprintln!("Error: {:?}", err);
+    ///             }
+    ///         }
+    ///     })
+    ///     .await;
+    /// }
+    ///
+    /// ```
     pub async fn fetch_unsubscribed(
         &self,
     ) -> impl Stream<Item = Result<MailchimpMember, FetchMemberError>> + '_ {
@@ -58,11 +94,13 @@ impl Client {
 
         let g = gen! {
             loop {
+                // Safe to unwrap here because the URL is mostly hardcoded (and the base URL is validated at construction time)
+                let url = self.base_url.join(&format!(
+                    "{}/3.0/lists/{}/members?status=unsubscribed&count={}&offset={}&sort_field=timestamp_signup&sort_dir=ASC",
+                    self.base_url, self.list_id, self.page_size.0, offset
+                )).unwrap();
                 let resp = self.http
-                  .get(&format!(
-                      "{}/3.0/lists/{}/members?status=unsubscribed&count={}&offset={}&sort_field=timestamp_signup&sort_dir=ASC",
-                      self.base_url, self.list_id, self.page_size.0, offset
-                  ))
+                  .get(url)
                   .basic_auth("anystring", Some(&self.api_key))
                   .send()
                   .await;
@@ -101,29 +139,56 @@ impl Client {
         g.into_async_iter()
     }
 
-    pub async fn archive_unsubscribed(&self, id: String) -> Result<String, ArchiveError> {
-        let resp = self
-            .http
-            .patch(&format!(
+    /// Archives an unsubscribed user from the list.
+    ///
+    /// ## Example
+    ///
+    /// ```no_run
+    /// use mailchimp_list_janitor::client::Client;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let client = Client::new("https://us2.api.mailchimp.com", "list-id", "api-abcd1234");
+    ///     let res = client.archive_unsubscribed("user-id").await;
+    ///     match res {
+    ///         Ok(id) => {
+    ///             println!("Archived user with id {}", id);
+    ///        }
+    ///        Err(err) => {
+    ///            eprintln!("Error: {:?}", err);
+    ///        }
+    ///    }
+    /// }
+    /// ```
+    pub async fn archive_unsubscribed(&self, id: &str) -> Result<String, ArchiveError> {
+        // Safe to unwrap here because the URL is mostly hardcoded (and the base URL is validated at construction time)
+        let url = self
+            .base_url
+            .join(&format!(
                 "{}/3.0/lists/{}/members/{}",
                 self.base_url, self.list_id, id
             ))
+            .unwrap();
+
+        let resp = self
+            .http
+            .patch(url)
             .basic_auth("anystring", Some(&self.api_key))
             .header("Content-Type", "application/json")
             .body("{\"status\":\"cleaned\"}")
             .send()
             .await
-            .map_err(|e| ArchiveError::Request(id.clone(), e))?;
+            .map_err(|e| ArchiveError::Request(id.to_string(), e))?;
 
         if resp.status().is_client_error() {
             let body: MailchimpError = resp
                 .json()
                 .await
-                .map_err(|e| ArchiveError::Request(id.clone(), e))?;
-            return Err(ArchiveError::Mailchimp(id, body));
+                .map_err(|e| ArchiveError::Request(id.to_string(), e))?;
+            return Err(ArchiveError::Mailchimp(id.to_string(), body));
         }
 
-        Ok(id)
+        Ok(id.to_string())
     }
 
     async fn get_unsubscribed_ids(self: Arc<Self>) -> Result<Vec<String>, FetchMemberError> {
@@ -142,6 +207,31 @@ impl Client {
         Ok(unsubcribed_ids)
     }
 
+    /// Archives all the unsubscribed users from the list using a stream.
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// use futures_util::StreamExt;
+    /// use mailchimp_list_janitor::client::Client;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let client = Client::new("https://us2.api.mailchimp.com", "list-id", "api-abcd1234");
+    ///     let stream = client.move_unsubscribed_to_archive().await?;
+    ///
+    ///     stream
+    ///         .for_each(|res| async move {
+    ///             match res {
+    ///                 Ok(id) => println!("Archived user with id {}", id),
+    ///                 Err(err) => eprintln!("{err}"),
+    ///             }
+    ///         })
+    ///         .await;
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn move_unsubscribed_to_archive(
         self: Arc<Self>,
     ) -> Result<impl Stream<Item = Result<String, Error>>, Error> {
@@ -158,7 +248,7 @@ impl Client {
           while let Some(id) = unsubcribed_ids.pop() {
               let this = self.clone();
               tasks.spawn(async move {
-                  this.archive_unsubscribed(id).await.map_err(|e| e.into())
+                  this.archive_unsubscribed(&id).await.map_err(|e| e.into())
               });
 
               if tasks.len() >= concurrency {
@@ -179,7 +269,7 @@ impl Client {
               let this = self.clone();
               if let Some(id) = unsubcribed_ids.pop() {
                   tasks.spawn(async move {
-                      this.archive_unsubscribed(id).await.map_err(|e| e.into())
+                      this.archive_unsubscribed(&id).await.map_err(|e| e.into())
                   });
               }
           }
