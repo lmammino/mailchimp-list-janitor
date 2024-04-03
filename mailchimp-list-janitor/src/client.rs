@@ -96,8 +96,8 @@ impl Client {
             loop {
                 // Safe to unwrap here because the URL is mostly hardcoded (and the base URL is validated at construction time)
                 let url = self.base_url.join(&format!(
-                    "{}/3.0/lists/{}/members?status=unsubscribed&count={}&offset={}&sort_field=timestamp_signup&sort_dir=ASC",
-                    self.base_url, self.list_id, self.page_size.0, offset
+                    "/3.0/lists/{}/members?status=unsubscribed&count={}&offset={}&sort_field=timestamp_signup&sort_dir=ASC",
+                    self.list_id, self.page_size.0, offset
                 )).unwrap();
                 let resp = self.http
                   .get(url)
@@ -164,10 +164,7 @@ impl Client {
         // Safe to unwrap here because the URL is mostly hardcoded (and the base URL is validated at construction time)
         let url = self
             .base_url
-            .join(&format!(
-                "{}/3.0/lists/{}/members/{}",
-                self.base_url, self.list_id, id
-            ))
+            .join(&format!("/3.0/lists/{}/members/{}", self.list_id, id))
             .unwrap();
 
         let resp = self
@@ -278,5 +275,116 @@ impl Client {
         };
 
         Ok(g.into_async_iter())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{header_exists, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn create_sample_member(id: u32) -> MailchimpMember {
+        MailchimpMember {
+            id: id.to_string(),
+            email_address: format!("  test{}@test.com", id),
+            unique_email_id: format!("unique-email-id-{}", id),
+            contact_id: format!("contact-id-{}", id),
+            full_name: format!("John Doe {}", id),
+            web_id: 123,
+            email_type: "html".into(),
+            status: "unsubscribed".into(),
+            unsubscribe_reason: "".into(),
+            consents_to_one_to_one_messaging: false,
+            merge_fields: Default::default(),
+            interests: Default::default(),
+            stats: Default::default(),
+            ip_signup: format!("127.0.0.{}", id),
+            timestamp_signup: "2021-01-01T00:00:00+00:00".into(),
+            ip_opt: format!("127.0.0.{}", id),
+            timestamp_opt: "2021-01-01T00:00:00+00:00".into(),
+            member_rating: 0.0,
+            last_changed: "2021-01-01T00:00:00+00:00".into(),
+            language: "en".into(),
+            vip: false,
+            location: Default::default(),
+            marketing_permissions: Default::default(),
+            last_note: None,
+            source: "API".into(),
+            tags_count: 0,
+            tags: Default::default(),
+            list_id: "list-id".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fetch_unsubscribed() {
+        let mock_server = MockServer::start().await;
+        let base_url = mock_server.uri();
+        let client = Client {
+            base_url: base_url.parse().unwrap(),
+            list_id: "list-id".into(),
+            api_key: "api-key".into(),
+            http: reqwest::Client::new(),
+            max_concurrency: MaxConcurrency::default(),
+            page_size: PageSize(2),
+        };
+
+        Mock::given(method("GET"))
+            .and(path("/3.0/lists/list-id/members"))
+            .and(query_param("status", "unsubscribed"))
+            .and(query_param("count", "2"))
+            .and(query_param("offset", "0"))
+            .and(query_param("sort_field", "timestamp_signup"))
+            .and(query_param("sort_dir", "ASC"))
+            .and(header_exists("Authorization"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(MailchimpListResponse {
+                    members: vec![create_sample_member(1), create_sample_member(2)],
+                }),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/3.0/lists/list-id/members"))
+            .and(query_param("status", "unsubscribed"))
+            .and(query_param("count", "2"))
+            .and(query_param("offset", "2"))
+            .and(query_param("sort_field", "timestamp_signup"))
+            .and(query_param("sort_dir", "ASC"))
+            .and(header_exists("Authorization"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(MailchimpListResponse {
+                    members: vec![create_sample_member(3), create_sample_member(4)],
+                }),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/3.0/lists/list-id/members"))
+            .and(query_param("status", "unsubscribed"))
+            .and(query_param("count", "2"))
+            .and(query_param("offset", "4"))
+            .and(query_param("sort_field", "timestamp_signup"))
+            .and(query_param("sort_dir", "ASC"))
+            .and(header_exists("Authorization"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(MailchimpListResponse { members: vec![] }),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let stream = client.fetch_unsubscribed().await;
+        let ids = stream
+            .map(|res| res.expect("request should be successful").id)
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(ids, vec!["1", "2", "3", "4"]);
     }
 }

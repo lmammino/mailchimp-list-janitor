@@ -1,13 +1,13 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Display};
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct MailchimpMemberTag {
     pub id: u64,
     pub name: String,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct MailchimpMemberNote {
     pub note_id: String,
     pub created_at: String,
@@ -15,14 +15,14 @@ pub struct MailchimpMemberNote {
     pub note: String,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct MailchimpMemberMarketingPermission {
     pub marketing_permission_id: String,
     pub text: String,
     pub enabled: bool,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct MailchimpMemberLocation {
     pub latitude: f64,
     pub longitude: f64,
@@ -33,21 +33,21 @@ pub struct MailchimpMemberLocation {
     pub region: String,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct MailchimpMemberStatsEcommerceData {
     pub total_revenue: f64,
     pub number_of_orders: u64,
     pub currency_code: String,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct MailchimpMemberStats {
     pub avg_open_rate: f64,
     pub avg_click_rate: f64,
     pub ecommerce_data: Option<MailchimpMemberStatsEcommerceData>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct MailchimpMember {
     pub id: String,
     pub email_address: String,
@@ -82,12 +82,12 @@ pub struct MailchimpMember {
     pub list_id: String,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct MailchimpListResponse {
     pub members: Vec<MailchimpMember>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct MailchimpError {
     pub r#type: String,
     pub title: String,
